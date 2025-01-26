@@ -26,3 +26,13 @@ Content
    ** A shell script showing you how to run your client 100 times.
 =====
 Please also find the detailed instructions in the comments of the individual files.
+
+Contributors:
+   Dang Nguyen <dpn>
+
+Files:
+   Makefile:
+      ** make mkdemos   : Copy the demos files into the main folder
+      ** make alldemos  : Compile the demos .c files
+      ** make cleandemos: Clean only the demos' object and executables
+      ** make cleardemos: Remove every demos files from the main folder

@@ -1,5 +1,13 @@
-# Compile the demo file
-demos: arrayRW simpleClient simpleServer
+
+####################################################################################################################################################
+# Copy the demos files into the main folder and compile them
+
+# Compile the demo files
+alldemos: arrayRW simpleClient simpleServer
+
+# Copy files from demos folder to the main folder
+mkdemos:
+	cp demos/* .
 
 simpleServer: simpleServer.o
 	gcc -Wall -pthread -g simpleServer.o -o simpleServer -lm
@@ -19,5 +27,12 @@ arrayRW: arrayRW.o
 arrayRW.o: arrayRW.c timer.h common.h
 	gcc -Wall -pthread -g -c arrayRW.c -o arrayRW.o
 
-clean:
-	rm *.o simpleClient simpleServer arrayRW
+# Clean the demos executable and object files
+cleandemos:
+	rm simpleClient.o simpleServer.o arrayRW.o simpleClient simpleServer arrayRW
+
+# Remove all demos files from the main folder
+cleardemos:
+	rm simpleClient.o simpleServer.o arrayRW.o simpleClient simpleServer arrayRW Icon_ arrayRW.c simpleClient.c simpleServer.c
+
+#################################################################################################################################################
