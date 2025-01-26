@@ -25,15 +25,17 @@
 #include "common.h"
 
 #define IPADDRESS "127.0.0.1" // Default IP Address
-#define INIT_VAL '_'          // Initial value char in the main array. Init string should be filled with this char
+#define INIT_VAL  '\0'        // Initial value char in the main array. Init string should be filled with this char
 #define PORT 3000             // Default port number
 #define NUMSTR 1024           // Default number of string in the main array
 #define STRLEN 1000           // Default length of each string in the main array
 
 char      **theArray;              // The main array: for read and write
+double    *timeArray;              // An array to hold the time it takes to process each reques
 char      ipaddr[20];              // The server IP address
 short int portnum;                 // Port number is represented by a 16 bits integer
-int       numstr, strlen, numthr;  // Number of string, length of each string in the main array, and number of thread created (= num of client)
+int       numstr, lenstr, numthr;  // Number of string, length of each string in the main array, and number of thread created (= num of client)
+int       resqnum;                 // To keep track of the number of request
 
 /* The thread function */
 void* thr_fn(void* arg) {
@@ -55,7 +57,7 @@ int CheckArgs(int argv, char* argc[]) {
             strncpy(ipaddr, IPADDRESS, sizeof(ipaddr) - 1);
             portnum = PORT;
             numstr = NUMSTR;
-            strlen = STRLEN;
+            lenstr = STRLEN;
             numthr = COM_CLIENT_THREAD_COUNT;
             break;
         
@@ -111,7 +113,7 @@ int CheckArgs(int argv, char* argc[]) {
                 OK--;
             }
 
-        strlen = STRLEN;
+        lenstr = STRLEN;
         numthr = COM_CLIENT_THREAD_COUNT;
 
         break;
@@ -141,10 +143,30 @@ int main(int argv, char* argc[]) {
         fprintf(stderr, "Cannot allocate memory for thrID\n");
         exit(EXIT_FAILURE);
     }
-    if ((clientfd = (int*) malloc(numthr * sizeof(int*))) == NULL) {
+    if ((clientfd = (int*) malloc(numthr * sizeof(int))) == NULL) {
         fprintf(stderr, "Cannot allocate memory for clientfd\n");
         exit(EXIT_FAILURE);
     }
+    if ((timeArray = (double*) malloc(numthr * sizeof(double))) == NULL) {
+        fprintf(stderr, "Cannot allocate memory for timeArray\n");
+        exit(EXIT_FAILURE);
+    }
+    if ((theArray = (char**) malloc(numstr * sizeof(char*))) == NULL) {
+        fprintf(stderr, "Cannot allocate memory for theArray\n");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < numstr; i++) {
+        if ((theArray[i] = (char*) malloc(lenstr * sizeof(char))) == NULL) {
+            fprintf(stderr, "Cannot allocate memory for theArray[%d]\n", i);
+            exit(EXIT_FAILURE);
+        }
+        
+        // Initialize the string by filling it with '\0'
+        memset(theArray[i], INIT_VAL, sizeof(theArray[i]));
+    }
+
+    resqnum = 0;
 
     sockvar.sin_addr.s_addr = inet_addr(ipaddr);
     sockvar.sin_port = portnum;
@@ -190,8 +212,14 @@ int main(int argv, char* argc[]) {
         }
     }
 
+    for (int i = 0; i < numstr; i++) {
+        free(theArray[i]);
+    }
+
     free(thrID);
     free(clientfd);
+    free(theArray);
+    free(timeArray);
 
     return 0;
 }
