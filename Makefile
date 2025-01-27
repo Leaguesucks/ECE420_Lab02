@@ -1,3 +1,27 @@
+all: main client attacker
+
+main: main.o
+	gcc -Wall -pthread -g main.o -o main -lm
+
+main.o: main.c timer.h common.h
+	gcc -Wall -pthread -g -c main.c -o main.o
+
+
+client: client.o
+	gcc -Wall -pthread -g client.o -o client -lm
+
+client.o: client.c common.h
+	gcc -Wall -pthread -g -c client.c -o client.o
+
+
+attacker: attacker.o
+	gcc -Wall -pthread -g attacker.o -o attacker -lm
+
+attacker.o: attacker.c common.h
+	gcc -Wall -pthread -g -c attacker.c -o attacker.o
+
+clean:
+	rm *.o attacker client main
 
 ####################################################################################################################################################
 # Copy the demos files into the main folder and compile them
