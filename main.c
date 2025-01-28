@@ -79,45 +79,61 @@ void *request_handler(void* arg) {
     /* Each thread only handle 1 request */
     pthread_mutex_lock(&mutex_recvlock[rank % numcli]); // Only 1 thread should receive data from the same client at the same time
 
+    // Receive the request from the client
+    printf("Receiving request\n");
     if ((rev = recv(cfd, request, REQUESTLEN * sizeof(char), 0)) < 0) {
-        fprintf(stderr, "Cannot read request from client %d\n", cfd);
-        exit(EXIT_FAILURE);
-    }
-    else if (rev == 0) { // Client has shut its communication
+        perror("recv"); // Use perror for better error reporting
+        pthread_mutex_unlock(&mutex_recvlock[rank % numcli]); // unlock before exiting to avoid deadlock
         pthread_exit(NULL);
-        return NULL; // To make very damn sure that this thread terminate
     }
-
+    else if (rev == 0) { // Client has closed the connection
+        pthread_mutex_unlock(&mutex_recvlock[rank % numcli]); // unlock before exiting to avoid deadlock
+        pthread_exit(NULL); // Exit the thread
+    }
+    printf("Request received\n");
     pthread_mutex_unlock(&mutex_recvlock[rank % numcli]);
 
     // Process the client requests
+    printf("Processing request\n");
     if (ParseMsg(request, &creqst) != 0) {
         fprintf(stderr, "Cannot process client %d request: \'%s\'\n", cfd, request);
-        exit(EXIT_FAILURE);
+        pthread_exit(NULL); // Exit if the request cannot be parsed
     }
 
     GET_TIME(start); // Start the timer
 
     if (creqst.is_read) { // It is a read operation
+        printf("Read operation\n");
         pthread_mutex_lock(&mutex_rwlock);
         
+        // Wait if there are active writers or pending writers
         while (writers > 0 || pending_writers > 0) { // Cannot read when there are writers
             pthread_cond_wait(&cond_rlock, &mutex_rwlock); // Wait for read lock to be released
         }
 
-        /* Granted read lock, proceed to do some read operations */
-        readers++;
-        pthread_cond_broadcast(&cond_rlock); // Wake up all readers
-        getContent(msg, creqst.pos, theArray); // Get the content from the array
+        /* Granted read lock, proceed to read */
+        readers++; // Increment the number of active readers
+        pthread_mutex_unlock(&mutex_rwlock); // Unlock the read-write mutex to allow other readers
+
+        getContent(msg, creqst.pos, theArray); // Retrieve the content from the array
+        printf("Content received\n");
+        pthread_mutex_lock(&mutex_rwlock); // Lock the read-write mutex again to update reader count
 
         /* Finish reading, now decrement the read count */
         if (readers > 0) readers--;
 
+        // If no readers are left and there are pending writers, wake one up
+        if (readers == 0 && pending_writers > 0) {
+            pthread_cond_signal(&cond_wlock); // Signal one waiting writer
+        }
+        printf("Finished reading\n");
         pthread_mutex_unlock(&mutex_rwlock);
     }
     else { // It is a write operation
+        printf("Write operation\n");
         pthread_mutex_lock(&mutex_rwlock);
 
+        // Wait if there are active readers or writers
         while (readers > 0 || writers > 0) { // Cannot write when there are readers or writers
             pending_writers++; // Notify that there is 1 more writers waiting
             pthread_cond_wait(&cond_wlock, &mutex_rwlock);
@@ -127,12 +143,15 @@ void *request_handler(void* arg) {
         /* Writer starts write operation */
         writers++;
         setContent(creqst.msg, creqst.pos, theArray); // Write to the array
-
+        printf("Content written");
         if (writers > 0) writers = 0; // Finish writing, now there should be 0 current writer
         if (readers == 0 && pending_writers > 0) { // If there are pending writers, wake one of them up
             pthread_cond_signal(&cond_wlock);
         }
-
+        else {
+            pthread_cond_broadcast(&cond_rlock); // Wake up all waiting readers
+        }
+        printf("Finished writing");
         pthread_mutex_unlock(&mutex_rwlock);
     }
 
@@ -281,14 +300,15 @@ int main(int argv, char* argc[]) {
         exit(EXIT_FAILURE);
     }
 
+    // Initialization of array of n strings
     for (int i = 0; i < numstr; i++) {
         if ((theArray[i] = (char*) malloc(lenstr * sizeof(char))) == NULL) {
             fprintf(stderr, "Cannot allocate memory for theArray[%d]\n", i);
             exit(EXIT_FAILURE);
         }
         
-        // Initialize the string by filling it with '\0'
-        memset(theArray[i], INIT_VAL, lenstr * sizeof(char*));
+        // Task Requirement #2 Page 5
+        sprintf(theArray[i], "String %d: the initial value", i);
     }
 
     if (pthread_mutex_init(&mutex_rwlock, NULL) != 0) {
