@@ -143,7 +143,7 @@ void *request_handler(void* arg) {
         /* Writer starts write operation */
         writers++;
         setContent(creqst.msg, creqst.pos, theArray); // Write to the array
-        printf("Content written");
+        printf("Content written\n");
         if (writers > 0) writers = 0; // Finish writing, now there should be 0 current writer
         if (readers == 0 && pending_writers > 0) { // If there are pending writers, wake one of them up
             pthread_cond_signal(&cond_wlock);
@@ -151,7 +151,7 @@ void *request_handler(void* arg) {
         else {
             pthread_cond_broadcast(&cond_rlock); // Wake up all waiting readers
         }
-        printf("Finished writing");
+        printf("Finished writing\n");
         pthread_mutex_unlock(&mutex_rwlock);
     }
 
