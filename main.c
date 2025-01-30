@@ -7,16 +7,7 @@
     *         ./main <array len> <serverIP> <server port> <strlen>              -- OPTIONAL
     *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL
     * TO DO:
-    *         * "main.c" logic looks solid, but it contradicts how they implemented the clients (client.c and attackers.c).
-    *            Here, we assumed that each client will connect to the server ONCE and send multiple request. However, as
-    *            I checked client.c, turns out they connect to the server for EACH request i.e in "main.c" we "connect()"
-    *            100 times (number of client) while in client.c, they created 100 clients, each client send their requests
-    *            by CONNECTING to the server (using "connect()"). Therefore, in our "main.c" server, there are 100 client 
-    *            descriptor where as in client.c, there are 1000 socket descriptor, and this SH*T causes the deadlock.
-    *            ---> F*** this lol, we need to ask the T.A
-    * 
-    *         * Provide error checking for mutex/cond lock/unlock in request_handler                             -- OPTIONAL, but may come in handdy for debug, also slow down accesing array
-    *         * Improve the program to take more args                                                            -- OPTIONAL, but might be neat
+    *        *  main.c passed all test program. Need to work on second args, provide more test cases if necess and clean up the code                                            
     * 
     * *** Provide more description here if needed ***
 */
@@ -63,7 +54,7 @@ char            ipaddr[20];               // The server IP address
 short int       portnum;                  // Port number is represented by a 16 bits integer
 int             numstr, lenstr, numthr;   // Number of string, length of each string in the main array, and number of thread created (= num of request for now)
 int             numcli;                   // Number of client
-int             rank;                     // Keep track of the number of request
+int             resqno;                   // Number of request that has been issued
 
 pthread_mutex_t  mutex_rwlock;            // Read/Write lock mutex
 pthread_cond_t   cond_rlock;              // Read lock
@@ -89,7 +80,7 @@ void *request_handler(void* arg) {
     double        start, end;                            // For measuring the array accesing time
     int           rev;
     int           err;
-    int           thisRank;
+    int           rank;
 
     cfd = (int) arg;
 
@@ -119,13 +110,16 @@ void *request_handler(void* arg) {
         exit(EXIT_FAILURE);
     }
 
-    GET_TIME(start); // Start the timer
-
     if (creqst.is_read) { // It is a read operation
         pthread_mutex_lock(&mutex_rwlock);
 
-        rank++; // Take advantages of the mutex, increment number of request
+        if (resqno >= numthr) resqno = 0; // Extra protection
+        rank = resqno;
+        resqno++; // Take advantages of the mutex, increment number of request
         
+
+        GET_TIME(start); // Start the timer
+
         while (writers > 0 || pending_writers > 0) { // Cannot read when there are writers
             pthread_cond_wait(&cond_rlock, &mutex_rwlock); // Wait for read lock to be released
         }
@@ -138,13 +132,26 @@ void *request_handler(void* arg) {
         /* Finish reading, now decrement the read count */
         if (readers > 0) readers--;
 
+        GET_TIME(end); // Finish the timer
+
+
+        timeArray[rank] = end - start;
+
+        if (write(cfd, theArray[creqst.pos], COM_BUFF_SIZE) < 0) {
+            fprintf(stderr, COLOR(RED)"Thread fail transmit response %d \n"COLOR(RESET), cfd);
+            exit(EXIT_FAILURE);
+        }
+
         pthread_mutex_unlock(&mutex_rwlock);
     }
     else { // It is a write operation
         pthread_mutex_lock(&mutex_rwlock);
 
-        rank++; // Take advantages of the mutex, increment number of request
-        thisRank = rank;
+        if (resqno >= numthr) resqno = 0; // Extra protection
+        rank = resqno;
+        resqno++; // Take advantages of the mutex, increment number of request
+
+        GET_TIME(start); // Start the timer
 
         while (readers > 0 || writers > 0) { // Cannot write when there are readers or writers
             pending_writers++; // Notify that there is 1 more writers waiting
@@ -161,26 +168,37 @@ void *request_handler(void* arg) {
             pthread_cond_signal(&cond_wlock);
         }
 
+        GET_TIME(end); // Finish the timer
+
+        timeArray[rank] = end - start;
+
+        if (write(cfd, theArray[creqst.pos], COM_BUFF_SIZE) < 0) {
+            fprintf(stderr, COLOR(RED)"Thread fail transmit response %d \n"COLOR(RESET), cfd);
+            exit(EXIT_FAILURE);
+        }
+
         pthread_mutex_unlock(&mutex_rwlock);
     }
 
-    GET_TIME(end); // Finish the timer
+    if (close(cfd) < 0) {
+        fprintf(stderr, COLOR(RED)"Cannot close descriptor %d, trying to shutdown...\n"COLOR(RESET), cfd);
 
-    timeArray[thisRank] = end - start;
+        if (shutdown(cfd, SHUT_WR) < 0) {
+            fprintf(stderr, COLOR(RED)"Cannot shut the descriptor %d down\n"COLOR(RESET), cfd);
+            exit(EXIT_FAILURE);
+        }
+    }
 
-    if (creqst.is_read) {
-        sprintf(response, "Server processed response %d: [R] theArray[%d] = \'%s\'", cfd, creqst.pos, msg);
-    }
-    else {
-        sprintf(response, "Server processed response %d: [W] theArray[%d] = \'%s\'", cfd, creqst.pos, creqst.msg);
-    }
+    //timeArray[thisRank] = end - start;
+
+    // if (creqst.is_read) {
+    //     sprintf(response, "Server processed response %d: [R] theArray[%d] = \'%s\'", cfd, creqst.pos, msg);
+    // }
+    // else {
+    //     sprintf(response, "Server processed response %d: [W] theArray[%d] = \'%s\'", cfd, creqst.pos, creqst.msg);
+    // }
 
     //printf(COLOR(GREEN)"\"%s\"\n"COLOR(RESET), response); // For debug
-
-    if (write(cfd, response, COM_BUFF_SIZE) < 0) {
-        fprintf(stderr, COLOR(RED)"Thread fail transmit response %d \n"COLOR(RESET), cfd);
-        exit(EXIT_FAILURE);
-    }
 
     pthread_exit(NULL);
     return NULL; // To make very damn sure that this thread exit
@@ -281,7 +299,7 @@ int main(int argv, char* argc[]) {
     if (CheckArgs(argv, argc) < 0) exit(EXIT_FAILURE); // Process the arguments
 
     errno = 0; // Set to 0 to handle errors
-    rank = 0;
+    resqno = 0;
 
     printf("Server: \'%s\', IPADDRESS = \'%s\', PORT = %d\n", argc[0], ipaddr, portnum);
     printf("numcli = %d, numthr = %d\n", numcli, numthr);
@@ -350,6 +368,7 @@ int main(int argv, char* argc[]) {
     }
 
     while (1) { // Loop indefinitely:
+        resqno = 0;
 
         /* Waiting for the clients to establish connection */
         for (int i = 0; i < numthr; i++) {
@@ -373,17 +392,17 @@ int main(int argv, char* argc[]) {
                 fprintf(stderr, "Cannot wait for thread %d to terminate\n", i);
                 exit(EXIT_FAILURE);
             }
-        }   
+        }
+
+        saveTimes(timeArray, resqno); // Save the average access time
     }
 
     printf(COLOR(MAGENTA)"Server waiting for all thread to terminate\n"COLOR(RESET)); // For debug
 
     /* The time length is the number of nonzero element in the time array */
-    for (timeLength = 0; timeLength < numthr; timeLength++) {
-        if (timeArray[timeLength] <= 0) break;
-    }
-
-    saveTimes(timeArray, timeLength); // Save the average access time
+    // for (timeLength = 0; timeLength < numthr; timeLength++) {
+    //     if (timeArray[timeLength] <= 0) break;
+    // }
 
 
     if (close(sockfd) != 0) {
