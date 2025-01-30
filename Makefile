@@ -21,7 +21,7 @@ attacker.o: attacker.c common.h
 	gcc -Wall -pthread -g -c attacker.c -o attacker.o
 
 clean:
-	rm *.o attacker client main
+	rm *.o attacker client main server_output_time_aggregated
 
 ####################################################################################################################################################
 # Copy the demos files into the main folder and compile them
