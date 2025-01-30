@@ -7,10 +7,16 @@
     *         ./main <array len> <serverIP> <server port> <strlen>              -- OPTIONAL
     *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL
     * TO DO:
-    *         * The program compiles successfully without any warnings or errors for now, but needs verification
+    *         * "main.c" logic looks solid, but it contradicts how they implemented the clients (client.c and attackers.c).
+    *            Here, we assumed that each client will connect to the server ONCE and send multiple request. However, as
+    *            I checked client.c, turns out they connect to the server for EACH request i.e in "main.c" we "connect()"
+    *            100 times (number of client) while in client.c, they created 100 clients, each client send their requests
+    *            by CONNECTING to the server (using "connect()"). Therefore, in our "main.c" server, there are 100 client 
+    *            descriptor where as in client.c, there are 1000 socket descriptor, and this SH*T causes the deadlock.
+    *            ---> F*** this lol, we need to ask the T.A
+    * 
     *         * Provide error checking for mutex/cond lock/unlock in request_handler                             -- OPTIONAL, but may come in handdy for debug, also slow down accesing array
     *         * Improve the program to take more args                                                            -- OPTIONAL, but might be neat
-    *         * If possible, verify memset() is doing its job. If not, just replace initialization with for loop
     * 
     * *** Provide more description here if needed ***
 */
