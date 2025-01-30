@@ -25,16 +25,30 @@
 #include <pthread.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 
 #include "timer.h"
 #include "common.h"
 
-#define IPADDRESS "127.0.0.1" // Default IP Address
-#define INIT_VAL  '\0'        // Initial value char in the main array. Init string should be filled with this char
-#define PORT 3000             // Default port number
-#define NUMSTR 1024           // Default number of string in the main array
-#define STRLEN 1000           // Default length of each string in the main array
-#define REQUESTLEN 13         // Length of the string request sent from client (XXX-Y-SSSSSS\0)
+/* For printing colored text (debugging or style purpose) */
+/* USAGE: COLOR(color) "String" COLOR(RESET)              */
+#define COLOR(code) "\033[" code "m"
+
+#define BLACK "30"
+#define RED "31"
+#define GREEN "32"
+#define YELLOW "33"
+#define BLUE "34"
+#define MAGENTA "35"
+#define CYAN "36"
+#define WHITE "37"
+#define RESET "0"
+/* ****************************************************** */
+
+#define IPADDRESS "127.0.0.1"                // Default IP Address
+#define PORT 3000                            // Default port number
+#define NUMSTR 1000                          // Default number of string in the main array
+#define STRLEN 1024                          // Default length of each string in the main array
 
 char            **theArray;               // The main array: for read and write
 double          *timeArray;               // An array to hold the time it takes to process each request
@@ -44,6 +58,7 @@ char            ipaddr[20];               // The server IP address
 short int       portnum;                  // Port number is represented by a 16 bits integer
 int             numstr, lenstr, numthr;   // Number of string, length of each string in the main array, and number of thread created (= num of request for now)
 int             numcli;                   // Number of client
+int             partion;                  // = numRequest / numCli: For each client connected create max partion thread
 
 pthread_mutex_t  mutex_rwlock;            // Read/Write lock mutex
 pthread_mutex_t *mutex_recvlock;          // A mutex array for receiving data from the client
@@ -55,7 +70,6 @@ int              writers;                 // Number of current writer. THERE SHO
 int              pending_writers;         // Number of writers waiting to write
 
 
-
 /* The thread function
  * NOTE:
  *      * The reasons why we didnt do a struct for mutexes and conditional var like in lectures is for optimizing accesing the array
@@ -63,24 +77,41 @@ int              pending_writers;         // Number of writers waiting to write
  * 
  *      *** More description here if needed ***
  */
-void *request_handler(void* arg) {
+void *request_handler(void* arg) {    
     long          rank;                                  // This thread rank
+    int           cnum;                                  // The client number
     int           cfd;                                   // This thread client descriptor
     ClientRequest creqst;                                // To store the processed client requests
-    char          request[COM_BUFF_SIZE];                // Request sent from client
+    char          request[lenstr + COM_BUFF_SIZE + 10];  // Request sent from client
     char          response[lenstr + COM_BUFF_SIZE + 10]; // Response to send back to the client (10 spare bytes added)
     char          msg[lenstr];                           // String that stored content from the array
     double        start, end;                            // For measuring the array accesing time
     int           rev;
+    int           err;
 
     rank = (long) arg; // Assign this thread its rank
-    cfd = clientdesc[rank % numcli]; // Each client is handled by numthr/numcli thread
+    cnum = rank / partion;
+    cfd = clientdesc[cnum];
+
+    // while ((cfd = clientdesc[rank % numcli]) < 0) { // Wait for the client assigned to this thread to establish connection
+    //     cfd = clientdesc[rank % numcli]; // Avoid deadlock
+    //     if (cfd >= 0) break;
+    // } 
+
+    // printf("Thread %ld has accepted client %d\n", rank, cfd); // For debug
+
+    /* Initialize all char array */
+    memset(request, '\0', (lenstr + COM_BUFF_SIZE + 10) * sizeof(char));
+    memset(response, '\0', (lenstr + COM_BUFF_SIZE + 10) * sizeof(char));
+    memset(msg, '\0', lenstr * sizeof(char));
 
     /* Each thread only handle 1 request */
-    pthread_mutex_lock(&mutex_recvlock[rank % numcli]); // Only 1 thread should receive data from the same client at the same time
+    pthread_mutex_lock(&mutex_recvlock[cnum]); // Only 1 thread should receive data from the same client at the same time
 
-    if ((rev = recv(cfd, request, REQUESTLEN * sizeof(char), 0)) < 0) {
-        fprintf(stderr, "Cannot read request from client %d\n", cfd);
+    if ((rev = recv(cfd, request, COM_BUFF_SIZE * sizeof(char), 0)) < 0) {
+        err = errno;
+        fprintf(stderr, COLOR(RED)"Thread %ld cannot read request from client %d (no. %d)\n"COLOR(RESET), rank, cfd, cnum);
+        fprintf(stderr, COLOR(RED)"Errno %d:\'%s\'\n"COLOR(RESET), err, strerror(err));
         exit(EXIT_FAILURE);
     }
     else if (rev == 0) { // Client has shut its communication
@@ -88,11 +119,13 @@ void *request_handler(void* arg) {
         return NULL; // To make very damn sure that this thread terminate
     }
 
-    pthread_mutex_unlock(&mutex_recvlock[rank % numcli]);
+    printf("Thread %ld received from client %d (no. %d): \'%s\'\n", rank, cfd, cnum, request); // For debug
+
+    pthread_mutex_unlock(&mutex_recvlock[cnum]);
 
     // Process the client requests
     if (ParseMsg(request, &creqst) != 0) {
-        fprintf(stderr, "Cannot process client %d request: \'%s\'\n", cfd, request);
+        fprintf(stderr, COLOR(RED)"Thread %ld cannot process client %d (no. %d) request: \'%s\'\n"COLOR(RESET), rank, cfd, cnum, request);
         exit(EXIT_FAILURE);
     }
 
@@ -147,14 +180,16 @@ void *request_handler(void* arg) {
         sprintf(response, "From server thread %ld to client %d: [W] theArray[%d] = \'%s\'", rank, cfd, creqst.pos, creqst.msg);
     }
 
-    pthread_mutex_lock(&mutex_translock[rank % numcli]); // Only 1 thread should transmit the data back to the same client at the same time
+    pthread_mutex_lock(&mutex_translock[cnum]); // Only 1 thread should transmit the data back to the same client at the same time
 
-    if (write(cfd, response, sizeof(response)) < 0) {
-        fprintf(stderr, "Thread %ld fail to response back to client %d\n", rank, cfd);
+    printf(COLOR(GREEN)"\"%s\"\n"COLOR(RESET), response); // For debug
+
+    if (write(cfd, response, COM_BUFF_SIZE) < 0) {
+        fprintf(stderr, COLOR(RED)"Thread %ld fail to response back to client %d (no. %d) \n"COLOR(RESET), rank, cfd, cnum);
         exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_unlock(&mutex_translock[rank % numcli]);
+    pthread_mutex_unlock(&mutex_translock[cnum]);
 
     pthread_exit(NULL);
     return NULL; // To make very damn sure that this thread exit
@@ -254,7 +289,12 @@ int main(int argv, char* argc[]) {
 
     if (CheckArgs(argv, argc) < 0) exit(EXIT_FAILURE); // Process the arguments
 
+    thRank = 0;
+    partion = ceil(numthr/numcli);
+    errno = 0; // Set to 0 to handle errors
+
     printf("Server: \'%s\', IPADDRESS = \'%s\', PORT = %d\n", argc[0], ipaddr, portnum);
+    printf("numcli = %d, numthr = %d, partion = %d\n", numcli, numthr, partion);
 
     if ((thrID = (pthread_t*) malloc(numthr * sizeof(pthread_t))) == NULL) {
         fprintf(stderr, "Cannot allocate memory for thrID\n");
@@ -288,7 +328,7 @@ int main(int argv, char* argc[]) {
         }
         
         // Initialize the string by filling it with '\0'
-        memset(theArray[i], INIT_VAL, lenstr * sizeof(char*));
+        memset(theArray[i], '\0', lenstr * sizeof(char));
     }
 
     if (pthread_mutex_init(&mutex_rwlock, NULL) != 0) {
@@ -320,6 +360,9 @@ int main(int argv, char* argc[]) {
     /* Initialize the time array to all 0 */
     memset(timeArray, 0, numthr * sizeof(double));
 
+    /* Initialize all client descriptors to -1 */
+    //memset(clientdesc, -1, numcli * sizeof(int));  
+
     sockvar.sin_addr.s_addr = inet_addr(ipaddr);
     sockvar.sin_port = portnum;
     sockvar.sin_family = AF_INET;
@@ -340,22 +383,32 @@ int main(int argv, char* argc[]) {
     }
 
     // while (1) { // Loop indefinitely: Not needed for now, kept here for potential improvement
-        for (thRank = 0; thRank < numthr; thRank++) {
-            if ((clientdesc[thRank] = accept(sockfd, NULL, NULL)) < 0) {
-                fprintf(stderr, "Cannot establish connection to client number %ld\n", thRank);
+
+        /* Waiting for the clients to establish connection */
+        for (int i = 0; i < numcli; i++) {
+            if ((clientdesc[i] = accept(sockfd, NULL, NULL)) < 0) {
+                fprintf(stderr, "Cannot establish connection to client number %d\n", i);
                 exit(EXIT_FAILURE);
             }
 
-            if (pthread_create(&thrID[thRank], NULL, request_handler, (void*) thRank) != 0) {
-                fprintf(stderr, "Cannot create thread %ld for client %d\n", thRank, clientdesc[thRank]);
-                exit(EXIT_FAILURE);
-            }
+            //printf(COLOR(YELLOW)"Establish connection with client %d (no. %d)\n"COLOR(RESET), clientdesc[i], i); // For debug
 
-        }
+            /* Create the threads needed to handle each client connection */
+            for (int j = 0; j < partion; j++) {
+                if (thRank >= numthr) break; // Has reached max number of thread created
+                if (pthread_create(&thrID[thRank], NULL, request_handler, (void*) thRank) != 0) {
+                    fprintf(stderr, "Cannot create thread %ld\n", thRank);
+                    exit(EXIT_FAILURE);
+                }
+                thRank++;
+            }
+        }    
     //}
 
+    printf(COLOR(MAGENTA)"Server waiting for all thread to terminate\n"COLOR(RESET)); // For debug
+
     /* Wait for all thread to terminate */
-    for (int i = 0; i < numthr; i++) {
+    for (int i = 0; i < thRank; i++) {
         if (pthread_join(thrID[i], NULL) != 0) {
             fprintf(stderr, "Cannot wait for thread %d to terminate\n", i);
             exit(EXIT_FAILURE);
