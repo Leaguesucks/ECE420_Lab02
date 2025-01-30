@@ -47,6 +47,7 @@ void setContent(char* src, int pos, char **theArray){
     char *dst = theArray[pos];
     int length = MIN(strlen(src)+1, COM_BUFF_SIZE);
     usleep(ART_DELAY);
+    printf("pos: %d, len = %d, src = \'%s\'\n", pos, length,  src); // For debug
     for (i=0; i<length; ++i){
         dst[i] = src[i];
     }

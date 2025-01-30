@@ -58,17 +58,14 @@
 
 char            **theArray;               // The main array: for read and write
 double          *timeArray;               // An array to hold the time it takes to process each request
-int             *clientdesc;              // An array that hold the client descriptor
 int             timeLength;               // Length of the time array, also = the number of request that has been issued
 char            ipaddr[20];               // The server IP address
 short int       portnum;                  // Port number is represented by a 16 bits integer
 int             numstr, lenstr, numthr;   // Number of string, length of each string in the main array, and number of thread created (= num of request for now)
 int             numcli;                   // Number of client
-int             partion;                  // = numRequest / numCli: For each client connected create max partion thread
+int             rank;                     // Keep track of the number of request
 
 pthread_mutex_t  mutex_rwlock;            // Read/Write lock mutex
-pthread_mutex_t *mutex_recvlock;          // A mutex array for receiving data from the client
-pthread_mutex_t *mutex_translock;         // A mutex array for transmiting the data back to the client
 pthread_cond_t   cond_rlock;              // Read lock
 pthread_cond_t   cond_wlock;              // Write lock
 int              readers;                 // Number of current readers
@@ -84,8 +81,6 @@ int              pending_writers;         // Number of writers waiting to write
  *      *** More description here if needed ***
  */
 void *request_handler(void* arg) {    
-    long          rank;                                  // This thread rank
-    int           cnum;                                  // The client number
     int           cfd;                                   // This thread client descriptor
     ClientRequest creqst;                                // To store the processed client requests
     char          request[lenstr + COM_BUFF_SIZE + 10];  // Request sent from client
@@ -94,29 +89,20 @@ void *request_handler(void* arg) {
     double        start, end;                            // For measuring the array accesing time
     int           rev;
     int           err;
+    int           thisRank;
 
-    rank = (long) arg; // Assign this thread its rank
-    cnum = rank / partion;
-    cfd = clientdesc[cnum];
-
-    // while ((cfd = clientdesc[rank % numcli]) < 0) { // Wait for the client assigned to this thread to establish connection
-    //     cfd = clientdesc[rank % numcli]; // Avoid deadlock
-    //     if (cfd >= 0) break;
-    // } 
+    cfd = (int) arg;
 
     // printf("Thread %ld has accepted client %d\n", rank, cfd); // For debug
 
     /* Initialize all char array */
     memset(request, '\0', (lenstr + COM_BUFF_SIZE + 10) * sizeof(char));
-    memset(response, '\0', (lenstr + COM_BUFF_SIZE + 10) * sizeof(char));
+    memset(response, '\0', (lenstr + COM_BUFF_SIZE + 50) * sizeof(char));
     memset(msg, '\0', lenstr * sizeof(char));
-
-    /* Each thread only handle 1 request */
-    pthread_mutex_lock(&mutex_recvlock[cnum]); // Only 1 thread should receive data from the same client at the same time
 
     if ((rev = recv(cfd, request, COM_BUFF_SIZE * sizeof(char), 0)) < 0) {
         err = errno;
-        fprintf(stderr, COLOR(RED)"Thread %ld cannot read request from client %d (no. %d)\n"COLOR(RESET), rank, cfd, cnum);
+        fprintf(stderr, COLOR(RED)"Cannot read request %d\n"COLOR(RESET), cfd);
         fprintf(stderr, COLOR(RED)"Errno %d:\'%s\'\n"COLOR(RESET), err, strerror(err));
         exit(EXIT_FAILURE);
     }
@@ -125,13 +111,11 @@ void *request_handler(void* arg) {
         return NULL; // To make very damn sure that this thread terminate
     }
 
-    printf("Thread %ld received from client %d (no. %d): \'%s\'\n", rank, cfd, cnum, request); // For debug
-
-    pthread_mutex_unlock(&mutex_recvlock[cnum]);
+    //printf("Received request %d: \'%s\'\n", cfd, request); // For debug
 
     // Process the client requests
     if (ParseMsg(request, &creqst) != 0) {
-        fprintf(stderr, COLOR(RED)"Thread %ld cannot process client %d (no. %d) request: \'%s\'\n"COLOR(RESET), rank, cfd, cnum, request);
+        fprintf(stderr, COLOR(RED)"Thread cannot process client request %d: \'%s\'\n"COLOR(RESET), cfd, request);
         exit(EXIT_FAILURE);
     }
 
@@ -139,6 +123,8 @@ void *request_handler(void* arg) {
 
     if (creqst.is_read) { // It is a read operation
         pthread_mutex_lock(&mutex_rwlock);
+
+        rank++; // Take advantages of the mutex, increment number of request
         
         while (writers > 0 || pending_writers > 0) { // Cannot read when there are writers
             pthread_cond_wait(&cond_rlock, &mutex_rwlock); // Wait for read lock to be released
@@ -156,6 +142,9 @@ void *request_handler(void* arg) {
     }
     else { // It is a write operation
         pthread_mutex_lock(&mutex_rwlock);
+
+        rank++; // Take advantages of the mutex, increment number of request
+        thisRank = rank;
 
         while (readers > 0 || writers > 0) { // Cannot write when there are readers or writers
             pending_writers++; // Notify that there is 1 more writers waiting
@@ -177,25 +166,21 @@ void *request_handler(void* arg) {
 
     GET_TIME(end); // Finish the timer
 
-    timeArray[rank] = end - start;
+    timeArray[thisRank] = end - start;
 
     if (creqst.is_read) {
-        sprintf(response, "From server thread %ld to client %d: [R] theArray[%d] = \'%s\'", rank, cfd, creqst.pos, msg);
+        sprintf(response, "Server processed response %d: [R] theArray[%d] = \'%s\'", cfd, creqst.pos, msg);
     }
     else {
-        sprintf(response, "From server thread %ld to client %d: [W] theArray[%d] = \'%s\'", rank, cfd, creqst.pos, creqst.msg);
+        sprintf(response, "Server processed response %d: [W] theArray[%d] = \'%s\'", cfd, creqst.pos, creqst.msg);
     }
 
-    pthread_mutex_lock(&mutex_translock[cnum]); // Only 1 thread should transmit the data back to the same client at the same time
-
-    printf(COLOR(GREEN)"\"%s\"\n"COLOR(RESET), response); // For debug
+    //printf(COLOR(GREEN)"\"%s\"\n"COLOR(RESET), response); // For debug
 
     if (write(cfd, response, COM_BUFF_SIZE) < 0) {
-        fprintf(stderr, COLOR(RED)"Thread %ld fail to response back to client %d (no. %d) \n"COLOR(RESET), rank, cfd, cnum);
+        fprintf(stderr, COLOR(RED)"Thread fail transmit response %d \n"COLOR(RESET), cfd);
         exit(EXIT_FAILURE);
     }
-
-    pthread_mutex_unlock(&mutex_translock[cnum]);
 
     pthread_exit(NULL);
     return NULL; // To make very damn sure that this thread exit
@@ -288,19 +273,18 @@ int CheckArgs(int argv, char* argc[]) {
 
 int main(int argv, char* argc[]) {
     int                sockfd;     // Socket descriptor
+    int                resqdes;    // The request descriptor
     struct sockaddr_in sockvar;    // Contains IP address, port number
     
     pthread_t          *thrID;     // An array to store the threads ID
-    long                thRank;    // To assign rank to a thread
 
     if (CheckArgs(argv, argc) < 0) exit(EXIT_FAILURE); // Process the arguments
 
-    thRank = 0;
-    partion = ceil(numthr/numcli);
     errno = 0; // Set to 0 to handle errors
+    rank = 0;
 
     printf("Server: \'%s\', IPADDRESS = \'%s\', PORT = %d\n", argc[0], ipaddr, portnum);
-    printf("numcli = %d, numthr = %d, partion = %d\n", numcli, numthr, partion);
+    printf("numcli = %d, numthr = %d\n", numcli, numthr);
 
     if ((thrID = (pthread_t*) malloc(numthr * sizeof(pthread_t))) == NULL) {
         fprintf(stderr, "Cannot allocate memory for thrID\n");
@@ -308,18 +292,6 @@ int main(int argv, char* argc[]) {
     }
     if ((timeArray = (double*) malloc(numthr * sizeof(double))) == NULL) {
         fprintf(stderr, "Cannot allocate memory for timeArray\n");
-        exit(EXIT_FAILURE);
-    }
-    if ((clientdesc = (int*) malloc(numcli * sizeof(int))) == NULL) {
-        fprintf(stderr, "Cannot allocate memory for clientdesc\n");
-        exit(EXIT_FAILURE);
-    }
-    if ((mutex_recvlock = (pthread_mutex_t*) malloc(numcli * sizeof(pthread_mutex_t))) == NULL) {
-        fprintf(stderr, "Cannot allocate memory for mutex_recvlock\n");
-        exit(EXIT_FAILURE);
-    }
-    if ((mutex_translock = (pthread_mutex_t*) malloc(numcli * sizeof(pthread_mutex_t))) == NULL) {
-        fprintf(stderr, "Cannot allocate memory for mutex_translock\n");
         exit(EXIT_FAILURE);
     }
     if ((theArray = (char**) malloc(numstr * sizeof(char*))) == NULL) {
@@ -350,17 +322,6 @@ int main(int argv, char* argc[]) {
         exit(EXIT_FAILURE);
     }
 
-    for (int i = 0; i < numcli; i++) {
-        if (pthread_mutex_init(&mutex_recvlock[i], NULL) != 0) {
-            fprintf(stderr, "Cannot create mutex_recvlock[%d\n", i);
-            exit(EXIT_FAILURE);
-        }
-        if (pthread_mutex_init(&mutex_translock[i], NULL) != 0) {
-            fprintf(stderr, "Cannot create mutex_translock[%d\n", i);
-            exit(EXIT_FAILURE);
-        }
-    }
-
     readers = writers = pending_writers = 0;
 
     /* Initialize the time array to all 0 */
@@ -388,38 +349,34 @@ int main(int argv, char* argc[]) {
         exit(EXIT_FAILURE);
     }
 
-    // while (1) { // Loop indefinitely: Not needed for now, kept here for potential improvement
+    while (1) { // Loop indefinitely:
 
         /* Waiting for the clients to establish connection */
-        for (int i = 0; i < numcli; i++) {
-            if ((clientdesc[i] = accept(sockfd, NULL, NULL)) < 0) {
-                fprintf(stderr, "Cannot establish connection to client number %d\n", i);
+        for (int i = 0; i < numthr; i++) {
+            if ((resqdes = accept(sockfd, NULL, NULL)) < 0) {
+                fprintf(stderr, "Cannot establish connection to request number %d\n", i);
                 exit(EXIT_FAILURE);
             }
 
             //printf(COLOR(YELLOW)"Establish connection with client %d (no. %d)\n"COLOR(RESET), clientdesc[i], i); // For debug
-
+            
             /* Create the threads needed to handle each client connection */
-            for (int j = 0; j < partion; j++) {
-                if (thRank >= numthr) break; // Has reached max number of thread created
-                if (pthread_create(&thrID[thRank], NULL, request_handler, (void*) thRank) != 0) {
-                    fprintf(stderr, "Cannot create thread %ld\n", thRank);
+            if (pthread_create(&thrID[i], NULL, request_handler, (void*) resqdes) != 0) {
+                    fprintf(stderr, "Cannot create thread %d or client %d\n", i, resqdes);
                     exit(EXIT_FAILURE);
-                }
-                thRank++;
             }
-        }    
-    //}
+        } 
+
+        /* Wait for all thread to terminate */
+        for (int i = 0; i < numthr; i++) {
+            if (pthread_join(thrID[i], NULL) != 0) {
+                fprintf(stderr, "Cannot wait for thread %d to terminate\n", i);
+                exit(EXIT_FAILURE);
+            }
+        }   
+    }
 
     printf(COLOR(MAGENTA)"Server waiting for all thread to terminate\n"COLOR(RESET)); // For debug
-
-    /* Wait for all thread to terminate */
-    for (int i = 0; i < thRank; i++) {
-        if (pthread_join(thrID[i], NULL) != 0) {
-            fprintf(stderr, "Cannot wait for thread %d to terminate\n", i);
-            exit(EXIT_FAILURE);
-        }
-    }
 
     /* The time length is the number of nonzero element in the time array */
     for (timeLength = 0; timeLength < numthr; timeLength++) {
@@ -450,17 +407,6 @@ int main(int argv, char* argc[]) {
         exit(EXIT_FAILURE);
     }
 
-    for (int i = 0; i < numcli; i++) {
-        if (pthread_mutex_destroy(&mutex_recvlock[i]) != 0) {
-            fprintf(stderr, "Could not destroy mutex_recvlock[%d]\n", i);
-            exit(EXIT_FAILURE);
-        }
-        if (pthread_mutex_destroy(&mutex_translock[i]) != 0) {
-            fprintf(stderr, "Could not destroy mutex_translock[%d]\n", i);
-            exit(EXIT_FAILURE);
-        }
-    }
-
     for (int i = 0; i < numstr; i++) {
         free(theArray[i]);
     }
@@ -468,9 +414,6 @@ int main(int argv, char* argc[]) {
     free(thrID);
     free(theArray);
     free(timeArray);
-    free(clientdesc);
-    free(mutex_recvlock);
-    free(mutex_translock);
 
     return 0;
 }
