@@ -3,7 +3,7 @@
     *   The main server
     * 
     * Run as: ./main                                                            -- Save times and effort, useful for debug but optional      -- DONE
-    *         ./main <array len> <serverIP> <server port>                       -- MAIN REQUIREMENT: Focus on this for now                   -- IN PROGRESS
+    *         ./main <array len> <serverIP> <server port>                       -- MAIN REQUIREMENT                                          -- DONE
     *         ./main <array len> <serverIP> <server port> <strlen>              -- OPTIONAL                                                  -- IN PROGRESS
     *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL                                                  -- IN PROGRESS
     * TO DO:
@@ -215,87 +215,60 @@ void *request_handler(void* arg) {
     * Param : args num, args
     * Return: 0 if OK, negative number otherwise
 */
-int CheckArgs(int argv, char* argc[]) {
-    int OK = 0;
+int CheckArgs(int argc, char* argv[]) {
     errno = 0;
 
-    switch(argv) {
-        case 1:
-            strncpy(ipaddr, IPADDRESS, sizeof(ipaddr) - 1);
-            portnum = PORT;
-            numstr = NUMSTR;
-            lenstr = STRLEN;
-            numthr = COM_NUM_REQUEST;
-            numcli = COM_CLIENT_THREAD_COUNT;
-            break;
-        
-        case 4:
-            strncpy(ipaddr, argc[2], sizeof(ipaddr) - 1);
-            
-            char *endptr1, *endptr2;
-            long result1, result2;
-
-            result1 = strtol(argc[1], &endptr1, 10);
-        
-            // Check for overflow for arraylen
-            if (errno == ERANGE) {
-                fprintf(stderr, "Args 1 <array len> = \'%s\': OVERFLOW\n", argc[1]);
-                OK--;
-            }
-            
-            errno = 0; // Reset errno
-            result2 = strtol(argc[3], &endptr2, 10);
-
-            // Check for overflow for port num
-            if (errno == ERANGE) {
-                fprintf(stderr, "Args 3 <server port> = \'%s\': OVERFLOW\n", argc[3]);
-                OK--;
-            }
-
-            // Check for valid input (array len and port num)
-            if (*endptr1 != '\0') {
-                fprintf(stderr, "Args 1 <array len> = \'%s\': INVALID INPUT! MUST BE AN INT\n", argc[1]);
-                OK--;
-            }
-            if (*endptr2 != '\0') {
-                fprintf(stderr, "Args 3 <server port> = \'%s\': INVALID INPUT! MUST BE AN INT\n", argc[3]);
-                OK--;
-            }
-
-            // Check if the array len is valid
-            if (result1 > INT_MAX) {
-                fprintf(stderr, "Array length = %ld: OVERFLOW! MAX <array len> = %d\n", result1, INT_MAX);
-                OK--;
-            }
-            if (result1 <= 0) {
-                fprintf(stderr, "Array length cannot be negative or 0\n");
-                OK--;
-            }
-
-            if (result2 > SHRT_MAX) {
-                fprintf(stderr, "Port number = %ld to large! MAX PORT = %d\n", result2, SHRT_MAX);
-                OK--;
-            }
-            if (result2 < 0) {
-                fprintf(stderr, "Port number cannot be negative\n");
-                OK--;
-            }
-
-            lenstr = STRLEN;
-            numthr = COM_NUM_REQUEST;
-            numcli = COM_CLIENT_THREAD_COUNT;
-
-            break;
-
-        default:
-            fprintf(stderr, "Number of argument = %d is invalid! Must be 0 or 3\n", argv - 1);
-            OK--;    
+    if (argc == 1) {  //default values when running main
+        strncpy(ipaddr, IPADDRESS, sizeof(ipaddr) - 1);
+        ipaddr[sizeof(ipaddr) - 1] = '\0';
+        portnum = PORT;
+        numstr = NUMSTR;
+        lenstr = STRLEN;
+        numthr = COM_NUM_REQUEST;
+        numcli = COM_CLIENT_THREAD_COUNT;
+        return 0;
     }
 
-    return OK;
+    if (argc != 4) {  // checks the number of arguments
+        fprintf(stderr, "Usage: %s <array len> <server IP> <server port>\n", argv[0]);
+        return -1;
+    }
+
+    // Parse array length
+    char *endptr;
+    long result = strtol(argv[1], &endptr, 10);
+    if (errno == ERANGE || result > INT_MAX || result <= 0 || *endptr != '\0') {
+        fprintf(stderr, "Invalid array length '%s'. Must be a positive integer (max: %d).\n", argv[1], INT_MAX);
+        return -1;
+    }
+    numstr = (int)result;
+
+    // Parse and validate IP address
+    if (inet_pton(AF_INET, argv[2], &ipaddr) != 1) {
+        fprintf(stderr, "Invalid IP address format: %s\n", argv[2]);
+        return -1;
+    }
+    strncpy(ipaddr, argv[2], sizeof(ipaddr) - 1);
+    ipaddr[sizeof(ipaddr) - 1] = '\0';
+
+    // Parse port number
+    errno = 0;
+    result = strtol(argv[3], &endptr, 10);
+    if (errno == ERANGE || result > SHRT_MAX || result <= 0 || *endptr != '\0') {
+        fprintf(stderr, "Invalid port number '%s'. Must be between 1 and %d.\n", argv[3], SHRT_MAX);
+        return -1;
+    }
+    portnum = (int)result;
+
+    // Set other constants
+    lenstr = STRLEN;
+    numthr = COM_NUM_REQUEST;
+    numcli = COM_CLIENT_THREAD_COUNT;
+
+    return 0;
 }
 
-int main(int argv, char* argc[]) {
+int main(int argc, char* argv[]) {
     int                sockfd;     // Socket descriptor
     long               resqdes;    // The request descriptor
     struct sockaddr_in sockvar;    // Contains IP address, port number
@@ -307,7 +280,7 @@ int main(int argv, char* argc[]) {
     errno = 0; // Set to 0 to handle errors
     resqno = 0;
 
-    printf("Server: \'%s\', IPADDRESS = \'%s\', PORT = %d\n", argc[0], ipaddr, portnum);
+    printf("Server: \'%s\', IPADDRESS = \'%s\', PORT = %d\n", argv[0], ipaddr, portnum);
     printf("numcli = %d, numthr = %d\n", numcli, numthr);
 
     if ((thrID = (pthread_t*) malloc(numthr * sizeof(pthread_t))) == NULL) {
@@ -409,7 +382,6 @@ int main(int argv, char* argc[]) {
     // for (timeLength = 0; timeLength < numthr; timeLength++) {
     //     if (timeArray[timeLength] <= 0) break;
     // }
-
 
     if (close(sockfd) != 0) {
         fprintf(stderr, "Could not close the connection to the server! Retrying...\n");
