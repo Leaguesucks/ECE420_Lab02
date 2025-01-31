@@ -2,12 +2,18 @@
     * main.c:
     *   The main server
     * 
-    * Run as: ./main
-    *         ./main <array len> <serverIP> <server port>                       -- MAIN REQUIREMENT: Focus on this for now
-    *         ./main <array len> <serverIP> <server port> <strlen>              -- OPTIONAL
-    *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL
+    * Run as: ./main                                                            -- Save times and effort, useful for debug but optional      -- DONE
+    *         ./main <array len> <serverIP> <server port>                       -- MAIN REQUIREMENT: Focus on this for now                   -- IN PROGRESS
+    *         ./main <array len> <serverIP> <server port> <strlen>              -- OPTIONAL                                                  -- IN PROGRESS
+    *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL                                                  -- IN PROGRESS
     * TO DO:
-    *        *  main.c passed all test program. Need to work on second args, provide more test cases if necess and clean up the code                                            
+    *        *  main.c successfully compiled without warning or error. It passes ./client, ./attacker and ./test.sh test
+    *        *  Needs to work on the second args execution and implementing the third and fourth if possible. Added more test
+    *        *  cases if necessary. The program also needs cleanup
+    * 
+    *        * For now, here are some possible options that we can add as extras:
+    *           -  Handle saving time when there are < 1000 clients in 1 iteration e.g., there are 4999 clients
+    *           -  Handle existing for server, either using signals CTRL-C or when client issues an exit command on stdin                                      
     * 
     * *** Provide more description here if needed ***
 */
@@ -72,28 +78,28 @@ int              pending_writers;         // Number of writers waiting to write
  *      *** More description here if needed ***
  */
 void *request_handler(void* arg) {    
-    int           cfd;                                   // This thread client descriptor
+    long           cfd;                                   // This thread client descriptor
     ClientRequest creqst;                                // To store the processed client requests
-    char          request[lenstr + COM_BUFF_SIZE + 10];  // Request sent from client
-    char          response[lenstr + COM_BUFF_SIZE + 10]; // Response to send back to the client (10 spare bytes added)
+    char          request[lenstr + COM_BUFF_SIZE + 50];  // Request sent from client
+    char          response[lenstr + COM_BUFF_SIZE + 50]; // Response to send back to the client (10 spare bytes added)
     char          msg[lenstr];                           // String that stored content from the array
     double        start, end;                            // For measuring the array accesing time
     int           rev;
     int           err;
     int           rank;
 
-    cfd = (int) arg;
+    cfd = (long) arg;
 
     // printf("Thread %ld has accepted client %d\n", rank, cfd); // For debug
 
     /* Initialize all char array */
-    memset(request, '\0', (lenstr + COM_BUFF_SIZE + 10) * sizeof(char));
+    memset(request,  '\0', (lenstr + COM_BUFF_SIZE + 50) * sizeof(char));
     memset(response, '\0', (lenstr + COM_BUFF_SIZE + 50) * sizeof(char));
-    memset(msg, '\0', lenstr * sizeof(char));
+    memset(msg,      '\0', lenstr * sizeof(char)                       );
 
     if ((rev = recv(cfd, request, COM_BUFF_SIZE * sizeof(char), 0)) < 0) {
         err = errno;
-        fprintf(stderr, COLOR(RED)"Cannot read request %d\n"COLOR(RESET), cfd);
+        fprintf(stderr, COLOR(RED)"Cannot read request %ld\n"COLOR(RESET), cfd);
         fprintf(stderr, COLOR(RED)"Errno %d:\'%s\'\n"COLOR(RESET), err, strerror(err));
         exit(EXIT_FAILURE);
     }
@@ -106,7 +112,7 @@ void *request_handler(void* arg) {
 
     // Process the client requests
     if (ParseMsg(request, &creqst) != 0) {
-        fprintf(stderr, COLOR(RED)"Thread cannot process client request %d: \'%s\'\n"COLOR(RESET), cfd, request);
+        fprintf(stderr, COLOR(RED)"Thread cannot process client request %ld: \'%s\'\n"COLOR(RESET), cfd, request);
         exit(EXIT_FAILURE);
     }
 
@@ -138,7 +144,7 @@ void *request_handler(void* arg) {
         timeArray[rank] = end - start;
 
         if (write(cfd, theArray[creqst.pos], COM_BUFF_SIZE) < 0) {
-            fprintf(stderr, COLOR(RED)"Thread fail transmit response %d \n"COLOR(RESET), cfd);
+            fprintf(stderr, COLOR(RED)"Thread fail transmit response %ld \n"COLOR(RESET), cfd);
             exit(EXIT_FAILURE);
         }
 
@@ -173,7 +179,7 @@ void *request_handler(void* arg) {
         timeArray[rank] = end - start;
 
         if (write(cfd, theArray[creqst.pos], COM_BUFF_SIZE) < 0) {
-            fprintf(stderr, COLOR(RED)"Thread fail transmit response %d \n"COLOR(RESET), cfd);
+            fprintf(stderr, COLOR(RED)"Thread fail transmit response %ld \n"COLOR(RESET), cfd);
             exit(EXIT_FAILURE);
         }
 
@@ -181,10 +187,10 @@ void *request_handler(void* arg) {
     }
 
     if (close(cfd) < 0) {
-        fprintf(stderr, COLOR(RED)"Cannot close descriptor %d, trying to shutdown...\n"COLOR(RESET), cfd);
+        fprintf(stderr, COLOR(RED)"Cannot close descriptor %ld, trying to shutdown...\n"COLOR(RESET), cfd);
 
         if (shutdown(cfd, SHUT_WR) < 0) {
-            fprintf(stderr, COLOR(RED)"Cannot shut the descriptor %d down\n"COLOR(RESET), cfd);
+            fprintf(stderr, COLOR(RED)"Cannot shut the descriptor %ld down\n"COLOR(RESET), cfd);
             exit(EXIT_FAILURE);
         }
     }
@@ -291,7 +297,7 @@ int CheckArgs(int argv, char* argc[]) {
 
 int main(int argv, char* argc[]) {
     int                sockfd;     // Socket descriptor
-    int                resqdes;    // The request descriptor
+    long               resqdes;    // The request descriptor
     struct sockaddr_in sockvar;    // Contains IP address, port number
     
     pthread_t          *thrID;     // An array to store the threads ID
@@ -381,7 +387,7 @@ int main(int argv, char* argc[]) {
             
             /* Create the threads needed to handle each client connection */
             if (pthread_create(&thrID[i], NULL, request_handler, (void*) resqdes) != 0) {
-                    fprintf(stderr, "Cannot create thread %d or client %d\n", i, resqdes);
+                    fprintf(stderr, "Cannot create thread %d or client %ld\n", i, resqdes);
                     exit(EXIT_FAILURE);
             }
         } 
