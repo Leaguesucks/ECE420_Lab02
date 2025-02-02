@@ -20,6 +20,9 @@ attacker: attacker.o
 attacker.o: attacker.c common.h
 	gcc -Wall -pthread -g -c attacker.c -o attacker.o
 
+cleanout:
+	rm server_output_time_aggregated
+
 clean:
 	rm *.o attacker client main server_output_time_aggregated
 

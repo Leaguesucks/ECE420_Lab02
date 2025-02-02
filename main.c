@@ -7,13 +7,8 @@
     *         ./main <array len> <serverIP> <server port> <strlen>              -- OPTIONAL                                                  -- IN PROGRESS
     *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL                                                  -- IN PROGRESS
     * TO DO:
-    *        *  main.c successfully compiled without warning or error. It passes ./client, ./attacker and ./test.sh test
-    *        *  Needs to work on the second args execution and implementing the third and fourth if possible. Added more test
-    *        *  cases if necessary. The program also needs cleanup
-    * 
-    *        * For now, here are some possible options that we can add as extras:
-    *           -  Handle saving time when there are < 1000 clients in 1 iteration e.g., there are 4999 clients
-    *           -  Handle existing for server, either using signals CTRL-C or when client issues an exit command on stdin                                      
+    *        * Added a SIGINT handler, the server compiled without any warnings or error, and passes ./client, ./attacker and ./test.sh tests
+    *        * Added more test cases and args handling to main.c if possible
     * 
     * *** Provide more description here if needed ***
 */
@@ -29,12 +24,14 @@
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
+#include <signal.h>
 
 #include "timer.h"
 #include "common.h"
 
-/* For printing colored text (debugging or style purpose) */
-/* USAGE: COLOR(color) "String" COLOR(RESET)              */
+/* For printing colored text (debugging or style purpose)
+ * USAGE: COLOR(color) "String" COLOR(RESET)              
+ */
 #define COLOR(code) "\033[" code "m"
 
 #define BLACK "30"
@@ -48,19 +45,20 @@
 #define RESET "0"
 /* ****************************************************** */
 
-#define IPADDRESS "127.0.0.1"                // Default IP Address
-#define PORT 3000                            // Default port number
-#define NUMSTR 1000                          // Default number of string in the main array
-#define STRLEN 1024                          // Default length of each string in the main array
+#define IPADDRESS "127.0.0.1"             // Default IP Address
+#define PORT   3000                       // Default port number
+#define NUMSTR 1000                       // Default number of string in the main array
+#define STRLEN 1024                       // Default length of each string in the main array
 
-char            **theArray;               // The main array: for read and write
-double          *timeArray;               // An array to hold the time it takes to process each request
-int             timeLength;               // Length of the time array, also = the number of request that has been issued
-char            ipaddr[20];               // The server IP address
-short int       portnum;                  // Port number is represented by a 16 bits integer
-int             numstr, lenstr, numthr;   // Number of string, length of each string in the main array, and number of thread created (= num of request for now)
-int             numcli;                   // Number of client
-int             resqno;                   // Number of request that has been issued
+char             **theArray;              // The main array: for read and write
+double           *timeArray;              // An array to hold the time it takes to process each request
+int              timeLength;              // Length of the time array, also = the number of request that has been issued
+char             ipaddr[20];              // The server IP address
+short int        portnum;                 // Port number is represented by a 16 bits integer
+int              numstr, lenstr, numthr;  // Number of string, length of each string in the main array, and number of thread created (= num of request for now)
+int              numcli;                  // Number of client
+int              resqno;                  // Number of request that has been issued
+int              sockfd;                  // Server socket descriptor
 
 pthread_mutex_t  mutex_rwlock;            // Read/Write lock mutex
 pthread_cond_t   cond_rlock;              // Read lock
@@ -69,6 +67,7 @@ int              readers;                 // Number of current readers
 int              writers;                 // Number of current writer. THERE SHOULD ONLY BE 1 WRITER AND 0 READERS AT ANY GIVEN MOMENT
 int              pending_writers;         // Number of writers waiting to write
 
+pthread_t        *thrID;                  // An array to store the threads ID
 
 /* The thread function
  * NOTE:
@@ -78,19 +77,17 @@ int              pending_writers;         // Number of writers waiting to write
  *      *** More description here if needed ***
  */
 void *request_handler(void* arg) {    
-    long           cfd;                                   // This thread client descriptor
+    long          cfd;                                   // This thread client descriptor
     ClientRequest creqst;                                // To store the processed client requests
     char          request[lenstr + COM_BUFF_SIZE + 50];  // Request sent from client
     char          response[lenstr + COM_BUFF_SIZE + 50]; // Response to send back to the client (10 spare bytes added)
     char          msg[lenstr];                           // String that stored content from the array
     double        start, end;                            // For measuring the array accesing time
-    int           rev;
-    int           err;
-    int           rank;
+    int           rev;                                   // Handle receive error
+    int           err;                                   // Handle errors when errno is set
+    int           rank;                                  // This thread rank, = current number of request
 
     cfd = (long) arg;
-
-    // printf("Thread %ld has accepted client %d\n", rank, cfd); // For debug
 
     /* Initialize all char array */
     memset(request,  '\0', (lenstr + COM_BUFF_SIZE + 50) * sizeof(char));
@@ -107,8 +104,6 @@ void *request_handler(void* arg) {
         pthread_exit(NULL);
         return NULL; // To make very damn sure that this thread terminate
     }
-
-    //printf("Received request %d: \'%s\'\n", cfd, request); // For debug
 
     // Process the client requests
     if (ParseMsg(request, &creqst) != 0) {
@@ -140,7 +135,6 @@ void *request_handler(void* arg) {
 
         GET_TIME(end); // Finish the timer
 
-
         timeArray[rank] = end - start;
 
         if (write(cfd, theArray[creqst.pos], COM_BUFF_SIZE) < 0) {
@@ -154,6 +148,7 @@ void *request_handler(void* arg) {
         pthread_mutex_lock(&mutex_rwlock);
 
         if (resqno >= numthr) resqno = 0; // Extra protection
+        
         rank = resqno;
         resqno++; // Take advantages of the mutex, increment number of request
 
@@ -195,26 +190,16 @@ void *request_handler(void* arg) {
         }
     }
 
-    //timeArray[thisRank] = end - start;
-
-    // if (creqst.is_read) {
-    //     sprintf(response, "Server processed response %d: [R] theArray[%d] = \'%s\'", cfd, creqst.pos, msg);
-    // }
-    // else {
-    //     sprintf(response, "Server processed response %d: [W] theArray[%d] = \'%s\'", cfd, creqst.pos, creqst.msg);
-    // }
-
-    //printf(COLOR(GREEN)"\"%s\"\n"COLOR(RESET), response); // For debug
-
     pthread_exit(NULL);
     return NULL; // To make very damn sure that this thread exit
 }
 
 /*
-    * Check the program arguments
-    * Param : args num, args
-    * Return: 0 if OK, negative number otherwise
-*/
+ *  Check the program arguments
+ *
+ *  Param : args num, args
+ *  Return: 0 if OK, negative number otherwise
+ */
 int CheckArgs(int argc, char* argv[]) {
     errno = 0;
 
@@ -229,7 +214,7 @@ int CheckArgs(int argc, char* argv[]) {
         return 0;
     }
 
-    if (argc != 4) {  // checks the number of arguments
+    else if (argc != 4) {  // checks the number of arguments
         fprintf(stderr, "Usage: %s <array len> <server IP> <server port>\n", argv[0]);
         return -1;
     }
@@ -258,7 +243,7 @@ int CheckArgs(int argc, char* argv[]) {
         fprintf(stderr, "Invalid port number '%s'. Must be between 1 and %d.\n", argv[3], SHRT_MAX);
         return -1;
     }
-    portnum = (int)result;
+    portnum = (int) result;
 
     // Set other constants
     lenstr = STRLEN;
@@ -268,14 +253,66 @@ int CheckArgs(int argc, char* argv[]) {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
-    int                sockfd;     // Socket descriptor
-    long               resqdes;    // The request descriptor
-    struct sockaddr_in sockvar;    // Contains IP address, port number
-    
-    pthread_t          *thrID;     // An array to store the threads ID
+/* Handle cleaning up the server in the event of shut down (free memory, shut down connection, etc) */
+void CleanUp(void) {
+    printf(COLOR(BLUE)"Server shutting down...\n"COLOR(RESET));
 
-    if (CheckArgs(argv, argc) < 0) exit(EXIT_FAILURE); // Process the arguments
+    if (close(sockfd) != 0) {
+        fprintf(stderr, "Could not close the connection to the server! Retrying...\n");
+        if (shutdown(sockfd, SHUT_RDWR) < 0) { // Forced shutdown attempt
+            fprintf(stderr, "Could not shut down the server\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (pthread_mutex_destroy(&mutex_rwlock) != 0) {
+        fprintf(stderr, "Could not destroy mutex_rwlock\n");
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_cond_destroy(&cond_rlock) != 0) {
+        fprintf(stderr, "Could not destroy cond_rlock\n");
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_cond_destroy(&cond_wlock) != 0) {
+        fprintf(stderr, "Could not destroy cond_wlock\n");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < numstr; i++) {
+        free(theArray[i]);
+    }
+
+    free(thrID);
+    free(theArray);
+    free(timeArray);
+
+    printf(COLOR(BLUE)"Server shut down successfully\n"COLOR(RESET));
+}
+
+/* Handle quiting the server when user issue CTRL-C 
+ *  Param: The signal, in this case SIGINT from CTRL-C
+ */
+void ForceQuit(int signo) {
+    printf(COLOR(RED)"\nForce quit server\n\n"COLOR(RESET));
+    
+    sleep(3); // Give all thread a chance to finish (has to be hard coded for now, somehow phtread_join causes seg fault)
+
+    saveTimes(timeArray, resqno); // Save time on the last run
+
+    CleanUp();
+    exit(EXIT_SUCCESS);
+}
+
+int main(int argc, char* argv[]) {
+    long               resqdes;    // The request descriptor to pass to each thread
+    struct sockaddr_in sockvar;    // Contains IP address, port number
+
+    if (signal(SIGINT, ForceQuit) == SIG_ERR) {
+        fprintf(stderr, "Cannot force quiting the server\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (CheckArgs(argc, argv) < 0) exit(EXIT_FAILURE); // Process the arguments
 
     errno = 0; // Set to 0 to handle errors
     resqno = 0;
@@ -324,9 +361,6 @@ int main(int argc, char* argv[]) {
     /* Initialize the time array to all 0 */
     memset(timeArray, 0, numthr * sizeof(double));
 
-    /* Initialize all client descriptors to -1 */
-    //memset(clientdesc, -1, numcli * sizeof(int));  
-
     sockvar.sin_addr.s_addr = inet_addr(ipaddr);
     sockvar.sin_port = portnum;
     sockvar.sin_family = AF_INET;
@@ -355,13 +389,11 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Cannot establish connection to request number %d\n", i);
                 exit(EXIT_FAILURE);
             }
-
-            //printf(COLOR(YELLOW)"Establish connection with client %d (no. %d)\n"COLOR(RESET), clientdesc[i], i); // For debug
             
             /* Create the threads needed to handle each client connection */
             if (pthread_create(&thrID[i], NULL, request_handler, (void*) resqdes) != 0) {
-                    fprintf(stderr, "Cannot create thread %d or client %ld\n", i, resqdes);
-                    exit(EXIT_FAILURE);
+                fprintf(stderr, "Cannot create thread %d or client %ld\n", i, resqdes);
+                exit(EXIT_FAILURE);
             }
         } 
 
@@ -376,41 +408,7 @@ int main(int argc, char* argv[]) {
         saveTimes(timeArray, resqno); // Save the average access time
     }
 
-    printf(COLOR(MAGENTA)"Server waiting for all thread to terminate\n"COLOR(RESET)); // For debug
-
-    /* The time length is the number of nonzero element in the time array */
-    // for (timeLength = 0; timeLength < numthr; timeLength++) {
-    //     if (timeArray[timeLength] <= 0) break;
-    // }
-
-    if (close(sockfd) != 0) {
-        fprintf(stderr, "Could not close the connection to the server! Retrying...\n");
-        if (shutdown(sockfd, SHUT_RDWR) < 0) { // Forced shutdown attempt
-            fprintf(stderr, "Could not shut down the server\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    if (pthread_mutex_destroy(&mutex_rwlock) != 0) {
-        fprintf(stderr, "Could not destroy mutex_rwlock\n");
-        exit(EXIT_FAILURE);
-    }
-    if (pthread_cond_destroy(&cond_rlock) != 0) {
-        fprintf(stderr, "Could not destroy cond_rlock\n");
-        exit(EXIT_FAILURE);
-    }
-    if (pthread_cond_destroy(&cond_wlock) != 0) {
-        fprintf(stderr, "Could not destroy cond_wlock\n");
-        exit(EXIT_FAILURE);
-    }
-
-    for (int i = 0; i < numstr; i++) {
-        free(theArray[i]);
-    }
-
-    free(thrID);
-    free(theArray);
-    free(timeArray);
+    CleanUp();
 
     return 0;
 }
