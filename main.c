@@ -8,6 +8,7 @@
     *         ./main <array len> <serverIP> <server port> <strlen> <client num> -- OPTIONAL                                                  -- IN PROGRESS
     * TO DO:
     *        * Added a SIGINT handler, the server compiled without any warnings or error, and passes ./client, ./attacker and ./test.sh tests
+    *        * Updated the initialization of theArray to be inline with the lab manual task 2 page 5
     *        * Added more test cases and args handling to main.c if possible
     * 
     * *** Provide more description here if needed ***
@@ -293,7 +294,7 @@ void CleanUp(void) {
  *  Param: The signal, in this case SIGINT from CTRL-C
  */
 void ForceQuit(int signo) {
-    printf(COLOR(RED)"\nForce quit server\n\n"COLOR(RESET));
+    printf(COLOR(RED)"\nForce quit server.\nCleaning up server, please wait 3 seconds...\n"COLOR(RESET));
     
     sleep(3); // Give all thread a chance to finish (has to be hard coded for now, somehow phtread_join causes seg fault)
 
@@ -340,7 +341,7 @@ int main(int argc, char* argv[]) {
         }
         
         // Initialize the string by filling it with '\0'
-        memset(theArray[i], '\0', lenstr * sizeof(char));
+        snprintf(theArray[i], lenstr, "String %d: the initial value", i);
     }
 
     if (pthread_mutex_init(&mutex_rwlock, NULL) != 0) {
