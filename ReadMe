@@ -24,16 +24,17 @@ Content
 ----
 7. test.sh
    ** A shell script showing you how to run your client 100 times.
-=====
-Please also find the detailed instructions in the comments of the individual files.
 
 Contributors:
    Dang Nguyen <dpn>
    Shammir Jose <shammir>
 
-Files:
+Added files:
    Makefile:
-      ** make mkdemos   : Copy the demos files into the main folder
-      ** make alldemos  : Compile the demos .c files
-      ** make cleandemos: Clean only the demos' object and executables
-      ** make cleardemos: Remove every demos files from the main folder
+      * Compiled the targeted files
+
+   main.c:
+      * The main server
+
+=====
+Please also find the detailed instructions in the comments of the individual files.

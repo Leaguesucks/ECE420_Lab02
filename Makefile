@@ -63,3 +63,12 @@ cleardemos:
 	rm simpleClient.o simpleServer.o arrayRW.o simpleClient simpleServer arrayRW Icon_ arrayRW.c simpleClient.c simpleServer.c
 
 #################################################################################################################################################
+
+zipall:
+	zip ECE420_Lab02_AllFiles *
+
+zipmain:
+	zip ECE420_Lab02 Makefile main.c
+
+cleanzip:
+	rm *.zip
